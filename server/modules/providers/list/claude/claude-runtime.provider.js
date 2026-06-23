@@ -13,7 +13,7 @@
  */
 
 import crypto from 'crypto';
-import { promises as fs } from 'fs';
+import { promises as fs, statSync } from 'fs';
 import os from 'os';
 import path from 'path';
 
@@ -118,6 +118,14 @@ function applyClaudeEffort(sdkOptions, resolvedEffort) {
     ultracode: true,
     enableWorkflows: true
   };
+}
+
+function isExistingDirectory(dir) {
+  try {
+    return statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function createRequestId() {
@@ -242,8 +250,17 @@ function mapCliOptionsToSDK(options = {}) {
     sdkOptions.pathToClaudeCodeExecutable = claudeExecutablePath;
   }
 
+  // Map working directory. The SDK spawns the Claude Code binary with this as
+  // cwd, and on Windows child_process.spawn throws ENOENT when cwd does not
+  // exist — surfaced as the misleading "native binary exists but failed to
+  // launch". Guard against a stale/missing project path: skip it and let the
+  // SDK default to the server's cwd rather than crash the run.
   if (cwd) {
-    sdkOptions.cwd = cwd;
+    if (isExistingDirectory(cwd)) {
+      sdkOptions.cwd = cwd;
+    } else {
+      console.warn(`[claude-sdk] Project directory does not exist, ignoring cwd: ${cwd}`);
+    }
   }
 
   if (permissionMode && permissionMode !== 'default') {
