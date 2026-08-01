@@ -84,8 +84,14 @@ function findServerEchoForLocalUser(
 }
 
 /**
- * Removes local optimistic user rows once a corresponding persisted turn is
- * available. Matches are one-to-one so repeated sends cannot claim one row.
+ * Removes duplicate live user rows once the persisted turn is available.
+ *
+ * Two kinds of live row can stand in for the same turn: the optimistic
+ * `local_` row the sending client renders immediately, and the mirrored copy
+ * the gateway fans out to the session's other devices. Both are transient
+ * stand-ins for one persisted turn, so either is dropped as soon as history
+ * carries it. Matches are one-to-one, so sending the same text twice keeps
+ * both rows.
  */
 export function removeOptimisticUserEchoes(
   serverMessages: NormalizedMessage[],
@@ -94,7 +100,9 @@ export function removeOptimisticUserEchoes(
   const claimedServerIds = new Set<string>();
 
   return realtimeMessages.filter((message) => {
-    if (!message.id.startsWith('local_')) {
+    // Only user turns can duplicate a persisted user turn; everything else
+    // (assistant text, tool rows) passes through untouched.
+    if (!userTurnFingerprint(message)) {
       return true;
     }
 

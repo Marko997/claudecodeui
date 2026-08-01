@@ -77,24 +77,25 @@ export class ChatSessionWriter {
     this.providerSessionId = options.providerSessionId;
   }
 
-  send(data: unknown): void {
-    this.emit(data);
-  }
-
   /**
-   * Emits an event to every watcher except `origin`.
+   * Mirrors an already-app-shaped event to every watcher except `origin`,
+   * bypassing run decoration.
    *
    * Used for the user's own prompt: the sending client rendered it
    * optimistically the moment it was typed, while other devices watching the
    * same session have no way to learn about it until they refetch history.
-   * The event still goes through decoration, so it gets a `seq` and lands in
-   * the replay buffer for clients that subscribe later.
+   *
+   * Deliberately not recorded in the replay buffer. Replay is keyed by `seq`
+   * and knows nothing about who sent what, so a buffered prompt would come
+   * back to its own sender on the next reconnect and render twice. Clients
+   * that join later pick the prompt up from persisted history, which is the
+   * authoritative source anyway.
    */
-  sendExcept(data: unknown, origin: RealtimeClientConnection): void {
-    this.emit(data, origin);
+  mirrorToOthers(message: NormalizedMessage, origin: RealtimeClientConnection): void {
+    this.forward(message, origin);
   }
 
-  private emit(data: unknown, origin?: RealtimeClientConnection): void {
+  send(data: unknown): void {
     const record = readObjectRecord(data);
     if (!record || typeof record.kind !== 'string') {
       // Provider runtimes only emit kind-based normalized messages. Anything
@@ -121,7 +122,7 @@ export class ChatSessionWriter {
 
     const outbound = this.options.decorateOutboundEvent(message);
     if (outbound) {
-      this.forward(outbound, origin);
+      this.forward(outbound);
     }
   }
 
