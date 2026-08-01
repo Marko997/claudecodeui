@@ -266,7 +266,7 @@ async function dispatchRun(
   // Mirror the prompt to every other device watching this session. The sending
   // client rendered it optimistically already and is excluded; without this a
   // second device would watch the reply stream in with no question above it.
-  run.writer.sendExcept(
+  run.writer.mirrorToOthers(
     createNormalizedMessage({
       kind: 'text',
       role: 'user',

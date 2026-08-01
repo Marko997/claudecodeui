@@ -341,7 +341,7 @@ test('detached and closed connections stop receiving, survivors keep streaming',
   });
 });
 
-test('sendExcept skips the originating client but still sequences the event', async () => {
+test('mirrorToOthers skips the sender and stays out of the replay buffer', async () => {
   await withIsolatedDatabase(() => {
     sessionsDb.createAppSession('app-run-12', 'claude', '/workspace/demo');
     const sender = new FakeConnection();
@@ -357,8 +357,16 @@ test('sendExcept skips the originating client but still sequences the event', as
     assert.ok(run);
     chatRunRegistry.attachConnection('app-run-12', watcher);
 
-    run.writer.sendExcept(
-      { kind: 'text', role: 'user', provider: 'claude', sessionId: 'x', content: 'my prompt' },
+    run.writer.mirrorToOthers(
+      {
+        id: 'mirrored-1',
+        sessionId: 'app-run-12',
+        timestamp: '2026-01-01T00:00:00.000Z',
+        provider: 'claude',
+        kind: 'text',
+        role: 'user',
+        content: 'my prompt',
+      },
       sender,
     );
 
@@ -366,7 +374,8 @@ test('sendExcept skips the originating client but still sequences the event', as
     assert.equal(watcher.frames.length, 1);
     assert.equal(watcher.frames[0]?.role, 'user');
     assert.equal(watcher.frames[0]?.content, 'my prompt');
-    // Buffered with a seq so a client subscribing later replays it too.
-    assert.equal(chatRunRegistry.replayEvents('app-run-12', 0).length, 1);
+    // Never buffered: replaying it would hand the sender back its own prompt
+    // on the next reconnect, which is exactly the duplicate this avoids.
+    assert.equal(chatRunRegistry.replayEvents('app-run-12', 0).length, 0);
   });
 });
