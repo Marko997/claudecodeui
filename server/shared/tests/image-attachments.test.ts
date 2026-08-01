@@ -16,6 +16,7 @@ import {
   parseFilesInputTag,
   parseImagesInputTag,
   resolveImageMediaType,
+  splitToolResultContent,
   toImageAttachments,
 } from '@/shared/image-attachments.js';
 
@@ -350,4 +351,58 @@ test('provider builders refuse descriptors outside the allowed roots', async () 
     cwd,
   );
   assert.deepEqual(claudeContent, [{ type: 'text', text: 'prompt' }]);
+});
+
+test('splitToolResultContent passes string results through untouched', () => {
+  assert.deepEqual(splitToolResultContent('plain output'), { text: 'plain output', images: [] });
+});
+
+test('splitToolResultContent separates text blocks from base64 screenshots', () => {
+  const result = splitToolResultContent([
+    { type: 'text', text: 'Took a screenshot' },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+    { type: 'text', text: 'of the login page' },
+  ]);
+
+  assert.equal(result.text, 'Took a screenshot\nof the login page');
+  assert.deepEqual(result.images, [{ data: 'data:image/png;base64,AAAA' }]);
+});
+
+test('splitToolResultContent keeps base64 payloads out of the text body', () => {
+  const { text } = splitToolResultContent([
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'PAYLOAD' } },
+  ]);
+
+  // The old JSON.stringify path spilled the whole payload into the chat.
+  assert.equal(text, '');
+  assert.equal(text.includes('PAYLOAD'), false);
+});
+
+test('splitToolResultContent defaults a missing media type and accepts url sources', () => {
+  const base64 = splitToolResultContent([
+    { type: 'image', source: { type: 'base64', data: 'BBBB' } },
+  ]);
+  assert.deepEqual(base64.images, [{ data: 'data:image/png;base64,BBBB' }]);
+
+  const url = splitToolResultContent([
+    { type: 'image', source: { type: 'url', url: 'https://example.test/shot.png' } },
+  ]);
+  assert.deepEqual(url.images, [{ data: 'https://example.test/shot.png' }]);
+});
+
+test('splitToolResultContent drops unusable blocks instead of stringifying them', () => {
+  const result = splitToolResultContent([
+    { type: 'image', source: { type: 'base64' } },
+    { type: 'something_else', payload: 42 },
+    null,
+    'bare string',
+  ]);
+
+  assert.deepEqual(result, { text: '', images: [] });
+});
+
+test('splitToolResultContent stringifies non-array object results', () => {
+  assert.deepEqual(splitToolResultContent({ ok: true }), { text: '{"ok":true}', images: [] });
+  assert.deepEqual(splitToolResultContent(null), { text: '', images: [] });
+  assert.deepEqual(splitToolResultContent(undefined), { text: '', images: [] });
 });

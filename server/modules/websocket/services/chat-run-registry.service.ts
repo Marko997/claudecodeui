@@ -276,8 +276,20 @@ export const chatRunRegistry = {
       return false;
     }
 
-    run.writer.updateWebSocket(connection);
+    run.writer.addConnection(connection);
     return true;
+  },
+
+  /**
+   * Removes a closing connection from every run it was watching.
+   *
+   * Without this a run only notices a dead socket on its next send, which for
+   * an idle-but-retained completed run may never come.
+   */
+  detachConnection(connection: RealtimeClientConnection): void {
+    for (const run of runs.values()) {
+      run.writer.removeConnection(connection);
+    }
   },
 
   /**

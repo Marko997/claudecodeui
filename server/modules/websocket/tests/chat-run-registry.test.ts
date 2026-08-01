@@ -311,3 +311,62 @@ test('startRun rejects a second concurrent run for the same session', async () =
     assert.ok(third);
   });
 });
+
+test('detached and closed connections stop receiving, survivors keep streaming', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('app-run-11', 'claude', '/workspace/demo');
+    const staying = new FakeConnection();
+    const detaching = new FakeConnection();
+    const closing = new FakeConnection();
+
+    const run = chatRunRegistry.startRun({
+      appSessionId: 'app-run-11',
+      provider: 'claude',
+      providerSessionId: null,
+      connection: staying,
+      userId: null,
+    });
+    assert.ok(run);
+    chatRunRegistry.attachConnection('app-run-11', detaching);
+    chatRunRegistry.attachConnection('app-run-11', closing);
+
+    chatRunRegistry.detachConnection(detaching);
+    closing.readyState = 3; // WS_CLOSED_STATE
+
+    run.writer.send({ kind: 'text', provider: 'claude', sessionId: 'x', content: 'after' });
+
+    assert.equal(staying.frames.length, 1);
+    assert.equal(detaching.frames.length, 0);
+    assert.equal(closing.frames.length, 0);
+  });
+});
+
+test('sendExcept skips the originating client but still sequences the event', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('app-run-12', 'claude', '/workspace/demo');
+    const sender = new FakeConnection();
+    const watcher = new FakeConnection();
+
+    const run = chatRunRegistry.startRun({
+      appSessionId: 'app-run-12',
+      provider: 'claude',
+      providerSessionId: null,
+      connection: sender,
+      userId: null,
+    });
+    assert.ok(run);
+    chatRunRegistry.attachConnection('app-run-12', watcher);
+
+    run.writer.sendExcept(
+      { kind: 'text', role: 'user', provider: 'claude', sessionId: 'x', content: 'my prompt' },
+      sender,
+    );
+
+    assert.equal(sender.frames.length, 0);
+    assert.equal(watcher.frames.length, 1);
+    assert.equal(watcher.frames[0]?.role, 'user');
+    assert.equal(watcher.frames[0]?.content, 'my prompt');
+    // Buffered with a seq so a client subscribing later replays it too.
+    assert.equal(chatRunRegistry.replayEvents('app-run-12', 0).length, 1);
+  });
+});

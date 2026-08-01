@@ -352,6 +352,71 @@ export function toImageAttachments(imagePaths: string[]): Array<{ path: string }
   return imagePaths.map((imagePath) => ({ path: toPosixPath(imagePath) }));
 }
 
+/** One image recovered from a tool result, as a ready-to-render data URL. */
+export type ToolResultImage = {
+  data: string;
+};
+
+/** Display-ready split of a tool result: text for the body, images for inline rendering. */
+export type SplitToolResultContent = {
+  text: string;
+  images: ToolResultImage[];
+};
+
+/**
+ * Splits a tool result's `content` into display text and inline images.
+ *
+ * Tools that return screenshots (browser automation, computer use) emit
+ * `image` content blocks alongside their text. Flattening those blocks with a
+ * plain `.text` read drops the screenshot entirely, while JSON-stringifying
+ * the whole array spills the base64 payload into the chat as unreadable text.
+ * Both are handled here instead: text blocks are joined, image blocks become
+ * data URLs the chat renders inline, and anything else is skipped.
+ */
+export function splitToolResultContent(content: unknown): SplitToolResultContent {
+  if (typeof content === 'string') {
+    return { text: content, images: [] };
+  }
+
+  if (!Array.isArray(content)) {
+    return {
+      text: content === null || content === undefined ? '' : JSON.stringify(content),
+      images: [],
+    };
+  }
+
+  const textParts: string[] = [];
+  const images: ToolResultImage[] = [];
+
+  for (const block of content) {
+    if (!block || typeof block !== 'object') {
+      continue;
+    }
+    const record = block as Record<string, unknown>;
+
+    if (record.type === 'image') {
+      const source = record.source as Record<string, unknown> | undefined;
+      if (source?.type === 'base64' && typeof source.data === 'string' && source.data) {
+        const mediaType = typeof source.media_type === 'string' && source.media_type
+          ? source.media_type
+          : 'image/png';
+        images.push({ data: `data:${mediaType};base64,${source.data}` });
+      } else if (source?.type === 'url' && typeof source.url === 'string' && source.url) {
+        images.push({ data: source.url });
+      }
+      // An image block we cannot resolve is dropped rather than stringified —
+      // its base64 payload is never useful as chat text.
+      continue;
+    }
+
+    if (typeof record.text === 'string') {
+      textParts.push(record.text);
+    }
+  }
+
+  return { text: textParts.join('\n'), images };
+}
+
 type ClaudeContentBlock =
   | { type: 'text'; text: string }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };

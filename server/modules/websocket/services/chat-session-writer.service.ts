@@ -84,6 +84,23 @@ export class ChatSessionWriter {
   }
 
   send(data: unknown): void {
+    this.emit(data);
+  }
+
+  /**
+   * Emits an event to every watcher except `origin`.
+   *
+   * Used for the user's own prompt: the sending client rendered it
+   * optimistically the moment it was typed, while other devices watching the
+   * same session have no way to learn about it until they refetch history.
+   * The event still goes through decoration, so it gets a `seq` and lands in
+   * the replay buffer for clients that subscribe later.
+   */
+  sendExcept(data: unknown, origin: RealtimeClientConnection | null): void {
+    this.emit(data, origin);
+  }
+
+  private emit(data: unknown, origin?: RealtimeClientConnection | null): void {
     const record = readObjectRecord(data);
     if (!record || typeof record.kind !== 'string') {
       // Provider runtimes only emit kind-based normalized messages. Anything
@@ -110,7 +127,7 @@ export class ChatSessionWriter {
 
     const outbound = this.options.decorateOutboundEvent(message);
     if (outbound) {
-      this.forward(outbound);
+      this.forward(outbound, origin);
     }
   }
 
@@ -137,7 +154,24 @@ export class ChatSessionWriter {
    * but it adds rather than replaces.
    */
   updateWebSocket(newConnection: RealtimeClientConnection): void {
-    this.connections.add(newConnection);
+    this.addConnection(newConnection);
+  }
+
+  addConnection(connection: RealtimeClientConnection): void {
+    this.connections.add(connection);
+  }
+
+  /**
+   * Drops a client from the run's live stream. Called when a socket closes so
+   * a long-running run does not retain dead connections until its next send.
+   */
+  removeConnection(connection: RealtimeClientConnection): void {
+    this.connections.delete(connection);
+  }
+
+  /** Number of clients currently receiving this run's events. */
+  get connectionCount(): number {
+    return this.connections.size;
   }
 
   setSessionId(sessionId: string): void {
@@ -157,7 +191,7 @@ export class ChatSessionWriter {
     this.options.onProviderSessionId(providerSessionId);
   }
 
-  private forward(message: NormalizedMessage): void {
+  private forward(message: NormalizedMessage, origin?: RealtimeClientConnection | null): void {
     const payload = JSON.stringify(message);
 
     // Sending is also when dead sockets get collected: a refreshed tab leaves
@@ -165,6 +199,9 @@ export class ChatSessionWriter {
     // grow for the whole life of the run. Deleting during iteration is safe
     // for a Set — the removed entry is simply not revisited.
     for (const connection of this.connections) {
+      if (connection === origin) {
+        continue;
+      }
       if (connection.readyState === WS_OPEN_STATE) {
         connection.send(payload);
       } else {

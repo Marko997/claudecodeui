@@ -5,6 +5,7 @@ import { GitBranchIcon, PencilIcon } from 'lucide-react';
 import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult, LLMProvider,DiffLine,Project } from '@/shared/types';
 import { formatUsageLimitText, stripProposedPlanEnvelope } from '@/modules/chat/utils/chatFormatting';
 import { ToolRenderer, ToolErrorDisplay, SubagentPanel, WorkflowPanel, shouldHideToolResult } from '@/modules/chat/tools';
+import ToolResultImages from '@/modules/chat/tools/ToolResultImages';
 import { LLMProviderLogo } from '@/shared/ui';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/modules/chat/transcript/Reasoning';
 import ChatMessageImages from '@/modules/chat/transcript/ChatMessageImages';
@@ -321,6 +322,16 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                       />
                     </div>
                   )
+                )}
+
+                {/* Images the tool returned (screenshots, renders). Kept outside the
+                    result section above so they still show for tools whose textual
+                    result is hidden, and for error results. */}
+                {message.toolResult?.images && message.toolResult.images.length > 0 && (
+                  <ToolResultImages
+                    images={message.toolResult.images}
+                    toolName={message.toolName}
+                  />
                 )}
               </>
             ) : message.isThinking ? (

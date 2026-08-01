@@ -18,7 +18,7 @@ import type {
   WorkflowAgentProgress,
   WorkflowInfo,
 } from '@/shared/types.js';
-import { parseFilesInputTag } from '@/shared/image-attachments.js';
+import { parseFilesInputTag, splitToolResultContent } from '@/shared/image-attachments.js';
 import { prepareTranscriptMessages, truncateNestedOutput } from '@/shared/message-unification.js';
 import {
   createNormalizedMessage,
@@ -172,15 +172,11 @@ async function readClaudeSubagentTranscript(filePath: string): Promise<ClaudeSub
               continue;
             }
 
+            const { text, images } = splitToolResultContent(part.content);
             tool.toolResult = {
-              content: typeof part.content === 'string'
-                ? part.content
-                : Array.isArray(part.content)
-                  ? part.content
-                    .map((contentPart: AnyRecord) => contentPart?.text || '')
-                    .join('\n')
-                  : JSON.stringify(part.content),
+              content: text,
               isError: Boolean(part.is_error),
+              ...(images.length > 0 ? { images } : {}),
             };
           }
         }
@@ -1375,6 +1371,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         for (let partIndex = 0; partIndex < raw.message.content.length; partIndex++) {
           const part = raw.message.content[partIndex];
           if (part.type === 'tool_result') {
+            const resultParts = splitToolResultContent(part.content);
             messages.push(createNormalizedMessage({
               id: `${baseId}_tr_${part.tool_use_id}`,
               sessionId,
@@ -1382,7 +1379,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               provider: PROVIDER,
               kind: 'tool_result',
               toolId: part.tool_use_id,
-              content: typeof part.content === 'string' ? part.content : JSON.stringify(part.content),
+              content: resultParts.text,
               isError: Boolean(part.is_error),
               // `toolUseResult` on disk, `tool_use_result` on the live SDK
               // stream. Reading only the transcript key meant a live agent
@@ -1392,6 +1389,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               // the file it edited — so it gets the same per-string cap the
               // transcript path applies before anything is sent or buffered.
               toolUseResult: truncateNestedOutput(raw.toolUseResult ?? raw.tool_use_result),
+              ...(resultParts.images.length > 0 ? { images: resultParts.images } : {}),
             }));
           } else if (part.type === 'text') {
             const text = part.text || '';
@@ -1817,12 +1815,12 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           continue;
         }
 
+        const { text, images } = splitToolResultContent(toolResult.content);
         msg.toolResult = {
-          content: typeof toolResult.content === 'string'
-            ? toolResult.content
-            : JSON.stringify(toolResult.content),
+          content: text,
           isError: toolResult.isError,
           toolUseResult: toolResult.toolUseResult,
+          ...(images.length > 0 ? { images } : {}),
         };
         msg.subagentTools = toolResult.subagentTools;
         msg.subagent = toolResult.subagent;

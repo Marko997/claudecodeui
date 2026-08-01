@@ -457,11 +457,18 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           || msg.toolName === 'Task'
           || msg.toolName === 'Agent';
 
+        // `tr` is either the merged toolResult the history adapter attached to
+        // the tool_use, or a standalone tool_result message from the live
+        // stream. Images sit at the top level of both shapes.
+        const toolResultImages = tr?.images;
         const toolResult = tr
           ? {
               content: formatToolResultContent(tr.content),
               isError: Boolean(tr.isError),
               toolUseResult: tr.toolUseResult,
+              ...(Array.isArray(toolResultImages) && toolResultImages.length > 0
+                ? { images: toolResultImages }
+                : {}),
             }
           : null;
 

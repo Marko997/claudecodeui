@@ -481,6 +481,8 @@ export type ToolResult = {
   isError?: boolean;
   timestamp?: string | number | Date;
   toolUseResult?: unknown;
+  /** Images the tool returned (e.g. screenshots), carried as inline data URLs. */
+  images?: ChatImage[];
   [key: string]: unknown;
 };
 
@@ -567,7 +569,13 @@ export type NormalizedMessage = {
   toolName?: string;
   toolInput?: unknown;
   toolId?: string;
-  toolResult?: { content: string; isError: boolean; toolUseResult?: unknown } | null;
+  toolResult?: {
+    content: string;
+    isError: boolean;
+    toolUseResult?: unknown;
+    /** Images the tool returned (e.g. screenshots), as inline data URLs. */
+    images?: Array<{ data?: string; name?: string; mimeType?: string }>;
+  } | null;
   /** A `tool_result` row's structured output — a launch acknowledgement's task id and metadata, a search's file list. */
   toolUseResult?: unknown;
   isError?: boolean;
