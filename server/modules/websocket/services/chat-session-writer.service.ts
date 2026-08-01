@@ -44,13 +44,22 @@ type ChatSessionWriterOptions = {
  *   intercepted and recorded as the provider-id mapping as well.
  */
 export class ChatSessionWriter {
-  ws: RealtimeClientConnection;
   userId: string | number | null;
   /**
    * Some runtimes feature-detect their writer with this flag; keep it so the
    * gateway writer is a drop-in replacement for `WebSocketWriter`.
    */
   isWebSocketWriter = true;
+
+  /**
+   * Every client currently watching this run.
+   *
+   * A run is owned by a session, not by the socket that started it: the same
+   * session open on a laptop and a phone must see the same stream. Each event
+   * is therefore fanned out to all attached connections, and sockets that have
+   * gone away are pruned on the next send.
+   */
+  private readonly connections = new Set<RealtimeClientConnection>();
 
   private readonly options: ChatSessionWriterOptions;
   /**
@@ -63,12 +72,29 @@ export class ChatSessionWriter {
 
   constructor(options: ChatSessionWriterOptions) {
     this.options = options;
-    this.ws = options.connection;
+    this.connections.add(options.connection);
     this.userId = options.userId;
     this.providerSessionId = options.providerSessionId;
   }
 
   send(data: unknown): void {
+    this.emit(data);
+  }
+
+  /**
+   * Emits an event to every watcher except `origin`.
+   *
+   * Used for the user's own prompt: the sending client rendered it
+   * optimistically the moment it was typed, while other devices watching the
+   * same session have no way to learn about it until they refetch history.
+   * The event still goes through decoration, so it gets a `seq` and lands in
+   * the replay buffer for clients that subscribe later.
+   */
+  sendExcept(data: unknown, origin: RealtimeClientConnection): void {
+    this.emit(data, origin);
+  }
+
+  private emit(data: unknown, origin?: RealtimeClientConnection): void {
     const record = readObjectRecord(data);
     if (!record || typeof record.kind !== 'string') {
       // Provider runtimes only emit kind-based normalized messages. Anything
@@ -95,7 +121,7 @@ export class ChatSessionWriter {
 
     const outbound = this.options.decorateOutboundEvent(message);
     if (outbound) {
-      this.forward(outbound);
+      this.forward(outbound, origin);
     }
   }
 
@@ -116,8 +142,30 @@ export class ChatSessionWriter {
     }
   }
 
+  /**
+   * Adds a client to the run's live stream. Named for `WebSocketWriter`
+   * parity, but additive: a reconnecting socket joins the existing watchers
+   * instead of displacing them.
+   */
   updateWebSocket(newConnection: RealtimeClientConnection): void {
-    this.ws = newConnection;
+    this.addConnection(newConnection);
+  }
+
+  addConnection(connection: RealtimeClientConnection): void {
+    this.connections.add(connection);
+  }
+
+  /**
+   * Drops a client from the run's live stream. Called when a socket closes so
+   * a long-running run does not retain dead connections until its next send.
+   */
+  removeConnection(connection: RealtimeClientConnection): void {
+    this.connections.delete(connection);
+  }
+
+  /** Number of clients currently receiving this run's events. */
+  get connectionCount(): number {
+    return this.connections.size;
   }
 
   setSessionId(sessionId: string): void {
@@ -137,9 +185,20 @@ export class ChatSessionWriter {
     this.options.onProviderSessionId(providerSessionId);
   }
 
-  private forward(message: NormalizedMessage): void {
-    if (this.ws.readyState === WS_OPEN_STATE) {
-      this.ws.send(JSON.stringify(message));
+  private forward(message: NormalizedMessage, origin?: RealtimeClientConnection): void {
+    // Serialize once — a busy run fans the same payload out to every watcher.
+    const payload = JSON.stringify(message);
+    for (const connection of this.connections) {
+      if (connection === origin) {
+        continue;
+      }
+      if (connection.readyState === WS_OPEN_STATE) {
+        connection.send(payload);
+      } else {
+        // Deleting during iteration is well-defined for Set and keeps closed
+        // sockets from accumulating across a long run.
+        this.connections.delete(connection);
+      }
     }
   }
 }

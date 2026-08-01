@@ -11,6 +11,7 @@ import type {
 import { formatUsageLimitText } from '../../utils/chatFormatting';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, ToolErrorDisplay, shouldHideToolResult } from '../../tools';
+import ToolResultImages from '../../tools/components/ToolResultImages';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
 
 import ChatMessageImages from './ChatMessageImages';
@@ -224,6 +225,16 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                       />
                     </div>
                   )
+                )}
+
+                {/* Images the tool returned (screenshots, renders). Kept outside the
+                    result section above so they still show for tools whose textual
+                    result is hidden, and for error results. */}
+                {message.toolResult?.images && message.toolResult.images.length > 0 && (
+                  <ToolResultImages
+                    images={message.toolResult.images}
+                    toolName={message.toolName}
+                  />
                 )}
               </>
             ) : message.isInteractivePrompt ? (

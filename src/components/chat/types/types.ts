@@ -27,6 +27,8 @@ export interface ToolResult {
   isError?: boolean;
   timestamp?: string | number | Date;
   toolUseResult?: unknown;
+  /** Images the tool returned (e.g. screenshots), carried as inline data URLs. */
+  images?: ChatImage[];
   [key: string]: unknown;
 }
 

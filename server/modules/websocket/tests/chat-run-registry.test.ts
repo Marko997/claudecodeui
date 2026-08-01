@@ -222,7 +222,7 @@ test('replayEvents returns only events after the requested seq', async () => {
   });
 });
 
-test('attachConnection reroutes the live stream to a new socket', async () => {
+test('attachConnection adds a new socket to the live stream', async () => {
   await withIsolatedDatabase(() => {
     sessionsDb.createAppSession('app-run-5', 'opencode', '/workspace/demo');
     const firstConnection = new FakeConnection();
@@ -241,7 +241,10 @@ test('attachConnection reroutes the live stream to a new socket', async () => {
     assert.equal(chatRunRegistry.attachConnection('app-run-5', secondConnection), true);
     run.writer.send({ kind: 'stream_delta', provider: 'opencode', sessionId: 'o', content: 'after' });
 
-    assert.deepEqual(firstConnection.frames.map((frame) => frame.content), ['before']);
+    // Attaching is additive: the socket that started the run keeps receiving,
+    // and the newcomer picks up from the moment it attached (earlier events
+    // reach it through chat.subscribe replay, not through the live fan-out).
+    assert.deepEqual(firstConnection.frames.map((frame) => frame.content), ['before', 'after']);
     assert.deepEqual(secondConnection.frames.map((frame) => frame.content), ['after']);
   });
 });
@@ -278,5 +281,91 @@ test('startRun rejects a second concurrent run for the same session', async () =
       userId: null,
     });
     assert.ok(third);
+  });
+});
+
+test('attaching a second client fans out instead of stealing the stream', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('app-run-10', 'claude', '/workspace/demo');
+    const first = new FakeConnection();
+    const run = chatRunRegistry.startRun({
+      appSessionId: 'app-run-10',
+      provider: 'claude',
+      providerSessionId: null,
+      connection: first,
+      userId: 'user-1',
+    });
+    assert.ok(run);
+
+    const second = new FakeConnection();
+    assert.equal(chatRunRegistry.attachConnection('app-run-10', second), true);
+
+    run.writer.send({ kind: 'text', provider: 'claude', sessionId: 'x', content: 'shared' });
+
+    // The device that started the run keeps receiving — this is the regression
+    // the single-socket handoff caused.
+    assert.equal(first.frames.length, 1);
+    assert.equal(second.frames.length, 1);
+    assert.equal(first.frames[0]?.content, 'shared');
+    assert.equal(second.frames[0]?.content, 'shared');
+  });
+});
+
+test('detached and closed connections stop receiving, survivors keep streaming', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('app-run-11', 'claude', '/workspace/demo');
+    const staying = new FakeConnection();
+    const detaching = new FakeConnection();
+    const closing = new FakeConnection();
+
+    const run = chatRunRegistry.startRun({
+      appSessionId: 'app-run-11',
+      provider: 'claude',
+      providerSessionId: null,
+      connection: staying,
+      userId: null,
+    });
+    assert.ok(run);
+    chatRunRegistry.attachConnection('app-run-11', detaching);
+    chatRunRegistry.attachConnection('app-run-11', closing);
+
+    chatRunRegistry.detachConnection(detaching);
+    closing.readyState = 3; // WS_CLOSED_STATE
+
+    run.writer.send({ kind: 'text', provider: 'claude', sessionId: 'x', content: 'after' });
+
+    assert.equal(staying.frames.length, 1);
+    assert.equal(detaching.frames.length, 0);
+    assert.equal(closing.frames.length, 0);
+  });
+});
+
+test('sendExcept skips the originating client but still sequences the event', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createAppSession('app-run-12', 'claude', '/workspace/demo');
+    const sender = new FakeConnection();
+    const watcher = new FakeConnection();
+
+    const run = chatRunRegistry.startRun({
+      appSessionId: 'app-run-12',
+      provider: 'claude',
+      providerSessionId: null,
+      connection: sender,
+      userId: null,
+    });
+    assert.ok(run);
+    chatRunRegistry.attachConnection('app-run-12', watcher);
+
+    run.writer.sendExcept(
+      { kind: 'text', role: 'user', provider: 'claude', sessionId: 'x', content: 'my prompt' },
+      sender,
+    );
+
+    assert.equal(sender.frames.length, 0);
+    assert.equal(watcher.frames.length, 1);
+    assert.equal(watcher.frames[0]?.role, 'user');
+    assert.equal(watcher.frames[0]?.content, 'my prompt');
+    // Buffered with a seq so a client subscribing later replays it too.
+    assert.equal(chatRunRegistry.replayEvents('app-run-12', 0).length, 1);
   });
 });

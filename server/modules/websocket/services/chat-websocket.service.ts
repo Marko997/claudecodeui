@@ -19,7 +19,7 @@ import type {
   ProviderPermissionDecision,
   ProviderRuntimeWriter,
 } from '@/shared/types.js';
-import { parseIncomingJsonObject } from '@/shared/utils.js';
+import { createNormalizedMessage, parseIncomingJsonObject } from '@/shared/utils.js';
 
 /**
  * Trust boundary for client-supplied image attachments: chat.send options come
@@ -211,6 +211,22 @@ async function handleChatSend(
   const verifiedAttachments = filterAttachmentsToUploadStore(attachmentCandidates);
   const uniqueAttachments = verifiedAttachments.filter(
     (descriptor, index, all) => all.findIndex((candidate) => candidate.path === descriptor.path) === index,
+  );
+
+  // Mirror the prompt to every other device watching this session. The sending
+  // client rendered it optimistically already and is excluded; without this a
+  // second device would watch the reply stream in with no question above it.
+  run.writer.sendExcept(
+    createNormalizedMessage({
+      kind: 'text',
+      role: 'user',
+      sessionId,
+      provider,
+      content: command,
+      images: uniqueAttachments.filter(isImageAttachmentDescriptor),
+      files: uniqueAttachments.filter((descriptor) => !isImageAttachmentDescriptor(descriptor)),
+    }),
+    ws,
   );
 
   // The provider runtimes receive the stable app session id. When their
@@ -421,5 +437,8 @@ export function handleChatConnection(
   ws.on('close', () => {
     console.log('[INFO] Chat client disconnected');
     connectedClients.delete(ws);
+    // Stop fanning run output at this socket. Other watchers of the same
+    // session keep streaming — a run outlives any single client.
+    chatRunRegistry.detachConnection(ws);
   });
 }

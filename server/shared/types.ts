@@ -1,6 +1,8 @@
 import type { IncomingMessage } from 'node:http';
 import type { Readable } from 'node:stream';
 
+import type { ToolResultImage } from './image-attachments.js';
+
 //----------------- HTTP RESPONSE SHAPES ------------
 /**
  * Canonical success envelope used by backend APIs that return a structured payload.
@@ -261,6 +263,8 @@ export type NormalizedMessage = {
     content?: string;
     isError?: boolean;
     toolUseResult?: unknown;
+    /** Images the tool returned (e.g. screenshots), as inline data URLs. */
+    images?: ToolResultImage[];
   };
   isError?: boolean;
   text?: string;
