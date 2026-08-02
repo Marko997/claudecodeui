@@ -17,6 +17,7 @@ import ChatComposer from './subcomponents/ChatComposer';
 import CommandResultModal from './subcomponents/CommandResultModal';
 
 function ChatInterface({
+  isActiveTab = true,
   selectedProject,
   selectedSession,
   ws,
@@ -133,6 +134,7 @@ function ChatInterface({
     statusCheckSentAtRef,
     lastSeqRef,
     sessionStore,
+    isActiveTab,
   });
 
   // Brand-new conversation: the composer allocated a stable session id via
@@ -225,7 +227,7 @@ function ChatInterface({
   // missed live events, and re-attaches a still-running stream to this socket.
   const handleWebSocketReconnect = useCallback(async () => {
     if (!selectedProject || !selectedSession) return;
-    await sessionStore.refreshFromServer(selectedSession.id);
+    await sessionStore.requestRefreshFromServer(selectedSession.id, { visible: isActiveTab });
     statusCheckSentAtRef.current.set(selectedSession.id, Date.now());
     sendMessage({
       type: 'chat.subscribe',
@@ -234,7 +236,7 @@ function ChatInterface({
         lastSeq: lastSeqRef.current.get(selectedSession.id) ?? 0,
       }],
     });
-  }, [selectedProject, selectedSession, sendMessage, sessionStore]);
+  }, [selectedProject, selectedSession, sendMessage, sessionStore, isActiveTab]);
 
   useChatRealtimeHandlers({
     subscribe,
@@ -252,6 +254,7 @@ function ChatInterface({
     onSessionIdle,
     onWebSocketReconnect: handleWebSocketReconnect,
     sessionStore,
+    isActiveTab,
   });
 
   useEffect(() => {
