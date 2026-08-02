@@ -27,6 +27,30 @@ const spawnCursor = dependencies.queryCursor;
 const router = express.Router();
 const COMMIT_DIFF_CHARACTER_LIMIT = 500_000;
 
+/**
+ * Above this, an untracked file is summarized instead of inlined as a diff.
+ *
+ * Inlining costs roughly three copies of the file — the read buffer, the split
+ * lines, and the joined `+`-prefixed string — and every byte is then serialized
+ * to the browser. A repository holding large build artifacts or art assets
+ * (Unity, game projects, generated bundles) can otherwise exhaust the server
+ * heap just by having its Git panel opened.
+ */
+const UNTRACKED_DIFF_BYTE_LIMIT = 1_000_000;
+
+/** Bytes inspected when deciding whether a file is binary. Matches git's own probe. */
+const BINARY_SNIFF_BYTES = 8_000;
+
+function describeFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+  return `${bytes} B`;
+}
+
 function spawnAsync(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -443,11 +467,27 @@ router.get('/diff', async (req, res) => {
       if (stats.isDirectory()) {
         // For directories, show a simple message
         diff = `Directory: ${repositoryRelativeFilePath}\n(Cannot show diff for directories)`;
+      } else if (stats.size > UNTRACKED_DIFF_BYTE_LIMIT) {
+        // Never read it: the point of the limit is to avoid the allocation.
+        diff = `Untracked file: ${repositoryRelativeFilePath}\n`
+             + `(${describeFileSize(stats.size)} — too large to display)`;
       } else {
-        const fileContent = await fs.readFile(filePath, 'utf-8');
-        const lines = fileContent.split('\n');
-        diff = `--- /dev/null\n+++ b/${repositoryRelativeFilePath}\n@@ -0,0 +1,${lines.length} @@\n` +
-               lines.map(line => `+${line}`).join('\n');
+        const fileBuffer = await fs.readFile(filePath);
+        // A NUL byte near the start is git's own binary signal. Decoding a
+        // binary asset as UTF-8 produces a screenful of replacement characters
+        // and ships the whole thing to the browser for nothing.
+        const isBinary = Buffer.isBuffer(fileBuffer)
+          && fileBuffer.subarray(0, BINARY_SNIFF_BYTES).includes(0);
+
+        if (isBinary) {
+          diff = `Untracked binary file: ${repositoryRelativeFilePath}\n`
+               + `(${describeFileSize(stats.size)} — no text diff available)`;
+        } else {
+          const fileContent = fileBuffer.toString('utf-8');
+          const lines = fileContent.split('\n');
+          diff = `--- /dev/null\n+++ b/${repositoryRelativeFilePath}\n@@ -0,0 +1,${lines.length} @@\n` +
+                 lines.map(line => `+${line}`).join('\n');
+        }
       }
     } else if (isDeleted) {
       // For deleted files, show the entire file content from HEAD as deletions
