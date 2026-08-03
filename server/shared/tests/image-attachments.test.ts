@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +10,7 @@ import {
   appendImagesInputTag,
   buildClaudeUserContent,
   buildCodexInputItems,
+  getGlobalImageAssetsDir,
   isImageAttachmentDescriptor,
   normalizeAttachmentDescriptors,
   isAllowedImageSourcePath,
@@ -327,7 +329,9 @@ test('buildCodexInputItems emits text plus absolute local_image paths', () => {
 
 test('isAllowedImageSourcePath only accepts the upload store and the run cwd', () => {
   const cwd = path.join(os.tmpdir(), 'some-project');
-  const uploadStore = path.join(os.homedir(), '.cloudcli', 'assets');
+  // Read the store from the same source the implementation uses, so this stays
+  // true whether or not CLOUDCLI_ASSETS_DIR relocates it.
+  const uploadStore = getGlobalImageAssetsDir();
 
   assert.equal(isAllowedImageSourcePath(path.join(uploadStore, 'shot.png'), cwd), true);
   assert.equal(isAllowedImageSourcePath(path.join(cwd, 'docs', 'diagram.png'), cwd), true);
@@ -357,7 +361,12 @@ test('splitToolResultContent passes string results through untouched', () => {
   assert.deepEqual(splitToolResultContent('plain output'), { text: 'plain output', images: [] });
 });
 
-test('splitToolResultContent separates text blocks from base64 screenshots', () => {
+// Tool result images are spilled to the asset store; point that at a temp
+// directory so these tests never touch the real one.
+const toolImageStore = await mkdtemp(path.join(os.tmpdir(), 'tool-images-'));
+process.env.CLOUDCLI_ASSETS_DIR = toolImageStore;
+
+test('splitToolResultContent separates text blocks from screenshots', () => {
   const result = splitToolResultContent([
     { type: 'text', text: 'Took a screenshot' },
     { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
@@ -365,25 +374,43 @@ test('splitToolResultContent separates text blocks from base64 screenshots', () 
   ]);
 
   assert.equal(result.text, 'Took a screenshot\nof the login page');
-  assert.deepEqual(result.images, [{ data: 'data:image/png;base64,AAAA' }]);
+  assert.equal(result.images.length, 1);
+  assert.match(result.images[0].name ?? '', /^tool-[0-9a-f]{40}\.png$/);
+  assert.equal(result.images[0].mimeType, 'image/png');
 });
 
-test('splitToolResultContent keeps base64 payloads out of the text body', () => {
-  const { text } = splitToolResultContent([
+test('splitToolResultContent spills image bytes to disk instead of inlining them', () => {
+  const { text, images } = splitToolResultContent([
     { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'PAYLOAD' } },
   ]);
 
-  // The old JSON.stringify path spilled the whole payload into the chat.
+  // Neither the text body nor the reference may carry the payload — that is
+  // the whole point of caching it.
   assert.equal(text, '');
-  assert.equal(text.includes('PAYLOAD'), false);
+  assert.equal(images[0].data, undefined);
+  assert.equal(JSON.stringify(images).includes('PAYLOAD'), false);
+
+  const cachedPath = path.join(toolImageStore, images[0].name ?? '');
+  assert.equal(readFileSync(cachedPath).equals(Buffer.from('PAYLOAD', 'base64')), true);
 });
 
-test('splitToolResultContent defaults a missing media type and accepts url sources', () => {
+test('splitToolResultContent reuses one cached file for repeated screenshots', () => {
+  const block = [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'REPEATED' } }];
+
+  const first = splitToolResultContent(block);
+  const second = splitToolResultContent(block);
+
+  // Same bytes, same content hash, so the second pass writes nothing new.
+  assert.equal(first.images[0].name, second.images[0].name);
+});
+
+test('splitToolResultContent defaults a missing media type and passes url sources through', () => {
   const base64 = splitToolResultContent([
     { type: 'image', source: { type: 'base64', data: 'BBBB' } },
   ]);
-  assert.deepEqual(base64.images, [{ data: 'data:image/png;base64,BBBB' }]);
+  assert.match(base64.images[0].name ?? '', /\.png$/);
 
+  // Nothing to cache for a remote URL, so it stays a direct reference.
   const url = splitToolResultContent([
     { type: 'image', source: { type: 'url', url: 'https://example.test/shot.png' } },
   ]);

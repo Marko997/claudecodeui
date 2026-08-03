@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 
 import type { ChatMessage } from '../../types/types';
@@ -18,6 +18,7 @@ import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
 import ToolGroupContainer from './ToolGroupContainer';
 import LoadAllMessagesOverlay from './LoadAllMessagesOverlay';
 import ChatExportMenu from './ChatExportMenu';
+import LastUserMessageBar from './LastUserMessageBar';
 
 interface ChatMessagesPaneProps {
   scrollContainerRef: RefObject<HTMLDivElement>;
@@ -159,6 +160,33 @@ function ChatMessagesPane({
     [messageKeyMap],
   );
 
+  // The prompt that started the turn currently on screen, pinned to the top so
+  // a long answer does not bury the question.
+  const lastUserPrompt = useMemo(() => {
+    for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
+      const message = chatMessages[index];
+      if (message.type === 'user') {
+        return String(message.content || '');
+      }
+    }
+    return '';
+  }, [chatMessages]);
+
+  // Only pin it once the prompt itself is plausibly out of view; showing the
+  // bar while the message sits right there is just noise.
+  const [isScrolledDown, setIsScrolledDown] = useState(false);
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const handleScroll = () => setIsScrolledDown(container.scrollTop > 160);
+    handleScroll();
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [scrollContainerRef, chatMessages.length]);
+
   return (
     <div
       ref={scrollContainerRef}
@@ -175,6 +203,7 @@ function ChatMessagesPane({
           </div>
         </div>
       )}
+      <LastUserMessageBar text={lastUserPrompt} visible={isScrolledDown} />
       <div className="mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4">
       {(isLoadingSessionMessages || isProcessing) && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-gray-500 dark:text-gray-400">
