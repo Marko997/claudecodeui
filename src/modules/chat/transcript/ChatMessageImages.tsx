@@ -18,7 +18,7 @@ type ChatMessageImagesProps = {
  * (`~/.cloudcli/assets`), then from the project files route as a fallback for
  * sessions recorded before attachments moved to the global store.
  */
-function useChatImageSrc(image: ChatImage, projectId?: string | null): { src: string | null; failed: boolean } {
+export function useChatImageSrc(image: ChatImage, projectId?: string | null): { src: string | null; failed: boolean } {
   const [src, setSrc] = useState<string | null>(image.data || null);
   const [failed, setFailed] = useState(false);
 

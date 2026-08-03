@@ -331,6 +331,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                   <ToolResultImages
                     images={message.toolResult.images}
                     toolName={message.toolName}
+                    projectId={selectedProject?.projectId}
                   />
                 )}
               </>

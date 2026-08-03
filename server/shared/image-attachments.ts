@@ -1,4 +1,5 @@
-import { promises as fs, realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { promises as fs, existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -17,9 +18,15 @@ import path from 'node:path';
  * `/api/assets/files/:filename` routes, which serve only from this folder.
  */
 
-/** Global storage folder for uploaded chat image attachments. */
+/**
+ * Global storage folder for uploaded chat image attachments.
+ *
+ * `CLOUDCLI_ASSETS_DIR` overrides it, which keeps tests (and anyone relocating
+ * the store off the home volume) from writing into the real one.
+ */
 export function getGlobalImageAssetsDir(): string {
-  return path.join(os.homedir(), '.cloudcli', 'assets');
+  const configured = process.env.CLOUDCLI_ASSETS_DIR?.trim();
+  return configured || path.join(os.homedir(), '.cloudcli', 'assets');
 }
 
 export type ImageAttachmentDescriptor = {
@@ -352,9 +359,24 @@ export function toImageAttachments(imagePaths: string[]): Array<{ path: string }
   return imagePaths.map((imagePath) => ({ path: toPosixPath(imagePath) }));
 }
 
-/** One image recovered from a tool result, as a ready-to-render data URL. */
+/**
+ * One image recovered from a tool result.
+ *
+ * `path` points into the global asset store, so history responses carry a
+ * reference instead of the bytes. `data` is only used for sources that are
+ * already a URL and have nothing to persist.
+ */
 export type ToolResultImage = {
-  data: string;
+  path?: string;
+  name?: string;
+  mimeType?: string;
+  data?: string;
+};
+
+/** Raw image payload as it appears in a provider transcript. */
+export type ToolResultImagePayload = {
+  mediaType: string;
+  base64: string;
 };
 
 /** Display-ready split of a tool result: text for the body, images for inline rendering. */
@@ -373,6 +395,58 @@ export type SplitToolResultContent = {
  * Both are handled here instead: text blocks are joined, image blocks become
  * data URLs the chat renders inline, and anything else is skipped.
  */
+const MEDIA_TYPE_TO_EXTENSION: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+};
+
+/**
+ * Writes a tool-result image into the global asset store and returns a
+ * reference to it.
+ *
+ * Transcripts hold screenshots as base64, and a session with fifty of them
+ * carries tens of megabytes. Inlining those into every history page makes the
+ * chat unusable over a mobile link, so the bytes are spilled to disk once —
+ * keyed by content hash, hence written only on first sight — and the history
+ * response carries a path the UI fetches lazily through
+ * `/api/assets/images/:filename`.
+ *
+ * Failures are swallowed: a screenshot that cannot be cached is not worth
+ * failing a history request over, and the caller simply omits it.
+ */
+export function persistToolResultImage(payload: ToolResultImagePayload): ToolResultImage | null {
+  const extension = MEDIA_TYPE_TO_EXTENSION[payload.mediaType] ?? '.bin';
+
+  try {
+    const bytes = Buffer.from(payload.base64, 'base64');
+    if (bytes.length === 0) {
+      return null;
+    }
+
+    const digest = createHash('sha1').update(bytes).digest('hex');
+    const fileName = `tool-${digest}${extension}`;
+    const directory = getGlobalImageAssetsDir();
+    const filePath = path.join(directory, fileName);
+
+    if (!existsSync(filePath)) {
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(filePath, bytes);
+    }
+
+    return {
+      path: toPosixPath(filePath),
+      name: fileName,
+      mimeType: payload.mediaType,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[Images] Failed to cache tool result image: ${message}`);
+    return null;
+  }
+}
+
 export function splitToolResultContent(content: unknown): SplitToolResultContent {
   if (typeof content === 'string') {
     return { text: content, images: [] };
@@ -400,7 +474,10 @@ export function splitToolResultContent(content: unknown): SplitToolResultContent
         const mediaType = typeof source.media_type === 'string' && source.media_type
           ? source.media_type
           : 'image/png';
-        images.push({ data: `data:${mediaType};base64,${source.data}` });
+        const cached = persistToolResultImage({ mediaType, base64: source.data });
+        if (cached) {
+          images.push(cached);
+        }
       } else if (source?.type === 'url' && typeof source.url === 'string' && source.url) {
         images.push({ data: source.url });
       }
