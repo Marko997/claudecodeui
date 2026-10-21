@@ -268,14 +268,10 @@ function ensureRuntimeDir(): void {
 
 function runCommand(command: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    // On Windows, npm is `npm.cmd`. Since Node's fix for CVE-2024-27980
-    // (v18.20.2 / v20.12.2+), spawning a .cmd/.bat without a shell throws
-    // `spawn EINVAL`. Use a shell on Windows. Args here are static literals,
-    // so there is no command-injection surface.
     const child = spawn(command, args, {
       cwd,
       env: process.env,
-      shell: process.platform === 'win32',
+      shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const output: string[] = [];
